@@ -81,7 +81,32 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+          python - <<'PY'
+          import os
+          import re
+          import requests
+          import sys
+
+          token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+          cleaned = token.strip()
+
+          print("Token vorhanden:", bool(token))
+          print("Token Laenge:", len(cleaned))
+          print("Token Format grob ok:", bool(re.match(r"^\d{8,12}:[A-Za-z0-9_-]{20,}$", cleaned)))
+
+          if cleaned != token:
+              print("Fehler: Leerzeichen oder Zeilenumbruch im Secret gefunden.")
+              sys.exit(1)
+
+          url = f"https://api.telegram.org/bot{cleaned}/getMe"
+          response = requests.get(url, timeout=20)
+
+          print("HTTP Status:", response.status_code)
+          print("Antwort:", response.text[:500])
+
+          if response.status_code != 200:
+              sys.exit(1)
+          PY
 
       - name: Install dependencies
         run: |

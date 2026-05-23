@@ -2,38 +2,93 @@ name: Daily AI News Telegram Bot
 
 on:
   schedule:
-    # 08:00 and 17:00 German time:
-    # In Winter (CET, UTC+1), this is 07:00 and 16:00 UTC.
-    # In Summer (CEST, UTC+2), this is 06:00 and 15:00 UTC.
-    # We configure for winter/standard time (07:00 & 16:00 UTC) as a baseline.
-    - cron: '0 7,16 * * *'
-  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
+    - cron: "0 8,17 * * *"
+      timezone: "Europe/Berlin"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: "pip"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Validate required secrets
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID_DE: ${{ secrets.TELEGRAM_CHANNEL_ID_DE }}
+          TELEGRAM_CHANNEL_ID_EN: ${{ secrets.TELEGRAM_CHANNEL_ID_EN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BOT_MODE: ${{ secrets.BOT_MODE }}
+        run: |
+          set -e
+          missing=0
 
-    - name: Run Telegram Bot Pipeline
-      env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHANNEL_ID_DE: ${{ secrets.TELEGRAM_CHANNEL_ID_DE }}
-        TELEGRAM_CHANNEL_ID_EN: ${{ secrets.TELEGRAM_CHANNEL_ID_EN }}
-        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        BOT_MODE: ${{ secrets.BOT_MODE }}
-      run: python main.py
+          for v in TELEGRAM_BOT_TOKEN GEMINI_API_KEY BOT_MODE; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty or missing"
+              missing=1
+            fi
+          done
+
+          case "$BOT_MODE" in
+            german_only|deutsch_only)
+              if [ -z "$TELEGRAM_CHANNEL_ID_DE" ] && [ -z "$TELEGRAM_CHANNEL_ID" ]; then
+                echo "::error::Need TELEGRAM_CHANNEL_ID_DE or TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
+                missing=1
+              fi
+              ;;
+            english_only)
+              if [ -z "$TELEGRAM_CHANNEL_ID_EN" ] && [ -z "$TELEGRAM_CHANNEL_ID" ]; then
+                echo "::error::Need TELEGRAM_CHANNEL_ID_EN or TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
+                missing=1
+              fi
+              ;;
+            bilingual_single_channel)
+              if [ -z "$TELEGRAM_CHANNEL_ID" ]; then
+                echo "::error::Need TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
+                missing=1
+              fi
+              ;;
+            two_channels)
+              if [ -z "$TELEGRAM_CHANNEL_ID_DE" ] || [ -z "$TELEGRAM_CHANNEL_ID_EN" ]; then
+                echo "::error::Need TELEGRAM_CHANNEL_ID_DE and TELEGRAM_CHANNEL_ID_EN for BOT_MODE=$BOT_MODE"
+                missing=1
+              fi
+              ;;
+            *)
+              echo "::error::Invalid BOT_MODE: $BOT_MODE"
+              missing=1
+              ;;
+          esac
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Telegram Bot Pipeline
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID_DE: ${{ secrets.TELEGRAM_CHANNEL_ID_DE }}
+          TELEGRAM_CHANNEL_ID_EN: ${{ secrets.TELEGRAM_CHANNEL_ID_EN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BOT_MODE: ${{ secrets.BOT_MODE }}
+        run: python main.py
+      

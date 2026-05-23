@@ -82,10 +82,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           python - <<'PY'
+          import json
           import os
           import re
-          import requests
           import sys
+          import urllib.request
+          import urllib.error
 
           token = os.getenv("TELEGRAM_BOT_TOKEN", "")
           cleaned = token.strip()
@@ -95,16 +97,30 @@ jobs:
           print("Token Format grob ok:", bool(re.match(r"^\d{8,12}:[A-Za-z0-9_-]{20,}$", cleaned)))
 
           if cleaned != token:
-              print("Fehler: Leerzeichen oder Zeilenumbruch im Secret gefunden.")
+              print("Fehler: Im Secret sind Leerzeichen oder ein Zeilenumbruch.")
               sys.exit(1)
 
           url = f"https://api.telegram.org/bot{cleaned}/getMe"
-          response = requests.get(url, timeout=20)
+          print("Teste URL gegen Telegram...")
 
-          print("HTTP Status:", response.status_code)
-          print("Antwort:", response.text[:500])
+          try:
+              with urllib.request.urlopen(url, timeout=20) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  print("HTTP Status:", response.status)
+                  print("Antwort:", body[:500])
 
-          if response.status_code != 200:
+                  data = json.loads(body)
+                  if not data.get("ok"):
+                      sys.exit(1)
+
+          except urllib.error.HTTPError as e:
+              body = e.read().decode("utf-8", errors="replace")
+              print("HTTP Status:", e.code)
+              print("Antwort:", body[:500])
+              sys.exit(1)
+
+          except Exception as e:
+              print("Fehler:", str(e))
               sys.exit(1)
           PY
 

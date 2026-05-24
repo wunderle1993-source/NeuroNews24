@@ -2,9 +2,10 @@ name: Daily AI News Telegram Bot
 
 on:
   schedule:
-    # GitHub Actions uses UTC. These UTC slots cover 08:00, 15:00 and
-    # 18:00 Europe/Berlin in both summer time and winter time.
-    - cron: "0 6,7,13,14,16,17 * * *"
+    # GitHub Actions uses UTC. Minute 7 avoids GitHub's peak load at :00.
+    # These UTC slots cover about 08:07, 15:07 and
+    # 18:07 Europe/Berlin in both summer time and winter time.
+    - cron: "7 6,7,13,14,16,17 * * *"
   workflow_dispatch:
 
 env:

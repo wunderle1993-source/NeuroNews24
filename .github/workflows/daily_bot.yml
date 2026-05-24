@@ -1,206 +1,35 @@
-name: Daily AI News Telegram Bot
+name: NeuroNews24 - 3x Daily AI News Post
 
 on:
   schedule:
-    # Retry scheduler: GitHub schedule can drop individual runs.
-    # We wake every 5 minutes and only post once during 08/15/18 Berlin hours.
-    - cron: "*/5 * * * *"
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
   workflow_dispatch:
-    inputs:
-      force:
-        description: "Force a verified test post even if this target hour already posted"
-        required: false
-        default: "false"
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
-permissions:
-  contents: read
-  actions: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
-  run-bot:
+  post-ai-news:
+    name: Post AI News Update to Telegram
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 10
     steps:
-      - name: Check Berlin posting time and duplicate guard
-        id: schedule_check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FORCE_RUN: ${{ github.event.inputs.force || 'false' }}
-        run: |
-          berlin_hour="$(TZ=Europe/Berlin date +'%H')"
-          target_key="$(TZ=Europe/Berlin date +'%Y-%m-%d-%H')"
-          echo "Berlin hour is: ${berlin_hour}"
-          case "${berlin_hour}" in
-            08|15|18)
-              echo "Scheduled target hour matched."
-              last_key="$(gh api "repos/${GITHUB_REPOSITORY}/actions/variables/LAST_SUCCESSFUL_POST_KEY" --jq .value 2>/dev/null || true)"
-              echo "Last successful post key: ${last_key:-none}"
-              if [ "${last_key}" = "${target_key}" ] && [ "${FORCE_RUN}" != "true" ]; then
-                echo "This target hour already posted successfully. Skipping duplicate retry."
-                echo "should_run=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              if [ "${last_key}" = "${target_key}" ] && [ "${FORCE_RUN}" = "true" ]; then
-                echo "Force run requested. Continuing despite duplicate guard."
-              fi
-              echo "should_run=true" >> "$GITHUB_OUTPUT"
-              echo "target_key=${target_key}" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "Not a target posting hour in Europe/Berlin. Skipping this DST guard run."
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-          esac
-
-      - name: Checkout repository
-        if: steps.schedule_check.outputs.should_run == 'true'
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        if: steps.schedule_check.outputs.should_run == 'true'
-        uses: actions/setup-python@v6
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Validate required secrets
-        if: steps.schedule_check.outputs.should_run == 'true'
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+      - name: Run NeuroNews24 Bot
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID:    ${{ secrets.TELEGRAM_CHANNEL_ID }}
           TELEGRAM_CHANNEL_ID_DE: ${{ secrets.TELEGRAM_CHANNEL_ID_DE }}
           TELEGRAM_CHANNEL_ID_EN: ${{ secrets.TELEGRAM_CHANNEL_ID_EN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BOT_MODE: ${{ secrets.BOT_MODE }}
-        run: |
-          set -e
-          missing=0
-
-          for v in TELEGRAM_BOT_TOKEN GEMINI_API_KEY BOT_MODE; do
-            if [ -z "${!v}" ]; then
-              echo "::error::$v is empty or missing"
-              missing=1
-            fi
-          done
-
-          case "$BOT_MODE" in
-            german_only|deutsch_only)
-              if [ -z "$TELEGRAM_CHANNEL_ID_DE" ] && [ -z "$TELEGRAM_CHANNEL_ID" ]; then
-                echo "::error::Need TELEGRAM_CHANNEL_ID_DE or TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
-                missing=1
-              fi
-              ;;
-            english_only)
-              if [ -z "$TELEGRAM_CHANNEL_ID_EN" ] && [ -z "$TELEGRAM_CHANNEL_ID" ]; then
-                echo "::error::Need TELEGRAM_CHANNEL_ID_EN or TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
-                missing=1
-              fi
-              ;;
-            bilingual_single_channel)
-              if [ -z "$TELEGRAM_CHANNEL_ID" ]; then
-                echo "::error::Need TELEGRAM_CHANNEL_ID for BOT_MODE=$BOT_MODE"
-                missing=1
-              fi
-              ;;
-            two_channels)
-              if [ -z "$TELEGRAM_CHANNEL_ID_DE" ] || [ -z "$TELEGRAM_CHANNEL_ID_EN" ]; then
-                echo "::error::Need TELEGRAM_CHANNEL_ID_DE and TELEGRAM_CHANNEL_ID_EN for BOT_MODE=$BOT_MODE"
-                missing=1
-              fi
-              ;;
-            *)
-              echo "::error::Invalid BOT_MODE: $BOT_MODE"
-              missing=1
-              ;;
-          esac
-
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
-
-      - name: Test Telegram token
-        if: steps.schedule_check.outputs.should_run == 'true'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import re
-          import sys
-          import urllib.error
-          import urllib.request
-
-          token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-          cleaned = token.strip()
-
-          print("Token present:", bool(token))
-          print("Token length:", len(cleaned))
-          print("Token format roughly ok:", bool(re.match(r"^\d{8,12}:[A-Za-z0-9_-]{20,}$", cleaned)))
-
-          if cleaned != token:
-              print("Secret contains leading/trailing whitespace or a newline.")
-              sys.exit(1)
-
-          url = f"https://api.telegram.org/bot{cleaned}/getMe"
-          print("Testing Telegram token...")
-
-          try:
-              with urllib.request.urlopen(url, timeout=20) as response:
-                  body = response.read().decode("utf-8", errors="replace")
-                  print("HTTP status:", response.status)
-                  print("Response:", body[:500])
-
-                  data = json.loads(body)
-                  if not data.get("ok"):
-                      sys.exit(1)
-
-          except urllib.error.HTTPError as e:
-              body = e.read().decode("utf-8", errors="replace")
-              print("HTTP status:", e.code)
-              print("Response:", body[:500])
-              sys.exit(1)
-
-          except Exception as e:
-              print("Error:", str(e))
-              sys.exit(1)
-          PY
-
-      - name: Install dependencies
-        if: steps.schedule_check.outputs.should_run == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Telegram Bot Pipeline
-        if: steps.schedule_check.outputs.should_run == 'true'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID_DE: ${{ secrets.TELEGRAM_CHANNEL_ID_DE }}
-          TELEGRAM_CHANNEL_ID_EN: ${{ secrets.TELEGRAM_CHANNEL_ID_EN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BOT_MODE: ${{ secrets.BOT_MODE }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          BOT_MODE:               ${{ secrets.BOT_MODE }}
+          PYTHONIOENCODING:       utf-8
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         run: python main.py
-
-      - name: Mark successful scheduled post
-        if: steps.schedule_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_KEY: ${{ steps.schedule_check.outputs.target_key }}
-        run: |
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/actions/variables/LAST_SUCCESSFUL_POST_KEY" \
-            -f name=LAST_SUCCESSFUL_POST_KEY \
-            -f value="${TARGET_KEY}" \
-          || gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/variables" \
-            -f name=LAST_SUCCESSFUL_POST_KEY \
-            -f value="${TARGET_KEY}"

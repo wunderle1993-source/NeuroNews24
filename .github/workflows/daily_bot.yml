@@ -2,14 +2,21 @@ name: Daily AI News Telegram Bot
 
 on:
   schedule:
-    # GitHub Actions uses UTC. Minute 7 avoids GitHub's peak load at :00.
-    # These UTC slots cover about 08:07, 15:07 and
-    # 18:07 Europe/Berlin in both summer time and winter time.
-    - cron: "7 6,7,13,14,16,17 * * *"
+    # Retry scheduler: GitHub schedule can drop individual runs.
+    # We wake every 5 minutes and only post once during 08/15/18 Berlin hours.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -20,13 +27,24 @@ jobs:
       - name: Check scheduled Berlin posting time
         id: schedule_check
         if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           berlin_hour="$(TZ=Europe/Berlin date +'%H')"
+          target_key="$(TZ=Europe/Berlin date +'%Y-%m-%d-%H')"
           echo "Berlin hour is: ${berlin_hour}"
           case "${berlin_hour}" in
             08|15|18)
               echo "Scheduled target hour matched."
+              last_key="$(gh api "repos/${GITHUB_REPOSITORY}/actions/variables/LAST_SUCCESSFUL_POST_KEY" --jq .value 2>/dev/null || true)"
+              echo "Last successful post key: ${last_key:-none}"
+              if [ "${last_key}" = "${target_key}" ]; then
+                echo "This target hour already posted successfully. Skipping duplicate retry."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
               echo "should_run=true" >> "$GITHUB_OUTPUT"
+              echo "target_key=${target_key}" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Not a target posting hour in Europe/Berlin. Skipping this DST guard run."
@@ -165,3 +183,16 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BOT_MODE: ${{ secrets.BOT_MODE }}
         run: python main.py
+
+      - name: Mark successful scheduled post
+        if: github.event_name == 'schedule' && steps.schedule_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_KEY: ${{ steps.schedule_check.outputs.target_key }}
+        run: |
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/actions/variables/LAST_SUCCESSFUL_POST_KEY" \
+            -f name=LAST_SUCCESSFUL_POST_KEY \
+            -f value="${TARGET_KEY}" \
+          || gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/variables" \
+            -f name=LAST_SUCCESSFUL_POST_KEY \
+            -f value="${TARGET_KEY}"

@@ -6,6 +6,8 @@ on:
     # These UTC slots cover about 08:07, 15:07 and
     # 18:07 Europe/Berlin in both summer time and winter time.
     - cron: "7 6,7,13,14,16,17 * * *"
+    # Temporary live auto-test for 2026-05-24 15:15 Europe/Berlin.
+    - cron: "15 13 * * *"
   workflow_dispatch:
 
 env:
